@@ -14,11 +14,10 @@ public enum CacheExpiry {
 /// Subclassing notes: This class fully supports subclassing.
 /// The easiest way to implement a subclass is to override `objectForKey` and `setObject:forKey:expires:`,
 /// e.g. to modify values prior to reading/writing to the cache.
-open class Cache<T: NSCoding> {
-    open let name: String
-    open let cacheDirectory: URL
-
-    internal let cache = NSCache<NSString, CacheObject>() // marked internal for testing
+open class Cache<T: Codable> {
+    public let name: String
+    public let cacheDirectory: URL
+    internal let cache = NSCache<NSString, CacheObject<T>>() // marked internal for testing
     fileprivate let fileManager = FileManager()
     fileprivate let queue = DispatchQueue(label: "com.aschuch.cache.diskQueue", attributes: DispatchQueue.Attributes.concurrent)
 
@@ -41,7 +40,6 @@ open class Cache<T: NSCoding> {
     public init(name: String, directory: URL?, fileProtection: String? = nil) throws {
         self.name = name
         cache.name = name
-
         if let d = directory {
             cacheDirectory = d
         } else {
@@ -114,7 +112,7 @@ open class Cache<T: NSCoding> {
     ///
     /// - returns: The cached object for the given name, or nil
     open func object(forKey key: String, returnExpiredObjectIfPresent: Bool = false) -> T? {
-        var object: CacheObject?
+        var object: CacheObject<T>?
 
         queue.sync {
             object = self.read(key)
@@ -122,7 +120,7 @@ open class Cache<T: NSCoding> {
 
         // Check if object is not already expired and return
         if let object = object, !object.isExpired() || returnExpiredObjectIfPresent {
-            return object.value as? T
+            return object.value
         }
 
         return nil
@@ -133,9 +131,9 @@ open class Cache<T: NSCoding> {
 
         queue.sync {
             let keys = self.allKeys()
-            let all = keys.map(self.read).flatMap { $0 }
+            let all = keys.map(self.read).compactMap { $0 }
             let filtered = includeExpired ? all : all.filter { !$0.isExpired() }
-            objects = filtered.map { $0.value as? T }.flatMap { $0 }
+            objects = filtered.map { $0.value}
         }
 
         return objects
@@ -190,7 +188,6 @@ open class Cache<T: NSCoding> {
     open func removeExpiredObjects() {
         queue.sync(flags: .barrier, execute: {
             let keys = self.allKeys()
-
             for key in keys {
                 let possibleObject = self.read(key)
                 if let object = possibleObject , object.isExpired() {
@@ -218,25 +215,30 @@ open class Cache<T: NSCoding> {
 
     // MARK: Private Helper (not thread safe)
 
-    fileprivate func add(_ object: CacheObject, key: String) {
+    fileprivate func add(_ object: CacheObject<T>, key: String) {
         // Set object in local cache
         cache.setObject(object, forKey: key as NSString)
 
         // Write object to disk
-        let path = urlForKey(key).path
-        NSKeyedArchiver.archiveRootObject(object, toFile: path)
+        let url = urlForKey(key)
+        guard let data = try? JSONEncoder().encode(object) else { return }
+        try? data.write(to: url)
     }
 
-    fileprivate func read(_ key: String) -> CacheObject? {
+    fileprivate func read(_ key: String) -> CacheObject<T>? {
         // Check if object exists in local cache
         if let object = cache.object(forKey: key as NSString) {
             return object
         }
 
         // Otherwise, read from disk
-        let path = urlForKey(key).path
-        if fileManager.fileExists(atPath: path) {
-            return _awesomeCache_unarchiveObjectSafely(path) as? CacheObject
+        let url = urlForKey(key)
+        if fileManager.fileExists(atPath: url.path) {
+            guard let data = try? Data(contentsOf:url),
+            let object = try? JSONDecoder().decode(CacheObject<T>.self, from: data) else {
+                return nil
+            }
+            return object
         }
 
         return nil
@@ -253,7 +255,7 @@ open class Cache<T: NSCoding> {
 
     fileprivate func allKeys() -> [String] {
         let urls = try? self.fileManager.contentsOfDirectory(at: self.cacheDirectory, includingPropertiesForKeys: nil, options: [])
-        return urls?.flatMap { $0.deletingPathExtension().lastPathComponent } ?? []
+        return urls?.compactMap { $0.deletingPathExtension().lastPathComponent } ?? []
     }
 
     fileprivate func urlForKey(_ key: String) -> URL {

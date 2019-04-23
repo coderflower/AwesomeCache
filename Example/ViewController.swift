@@ -9,23 +9,34 @@
 import UIKit
 import AwesomeCache
 
+struct Person: Codable, CustomStringConvertible {
+    let name: String
+    let age: Int
+    var description: String {
+        return "name: \(name), age: \(age)"
+    }
+}
+
 class ViewController: UIViewController {
     
     @IBOutlet var textView: UITextView!
     
-    let cache = try! Cache<NSString>(name: "AwesomeCache")
+    let cache = try! Cache<Person>(name: "AwesomeCache")
                             
 	override func viewDidLoad() {
 		super.viewDidLoad()
-		textView.text = (cache["myText"] as? String) ?? ""
+        cache["person"] = Person(name: "Cai", age: 18)
+        print(cache.cacheDirectory)
 	}
     
     @IBAction func reloadData(_ sender: AnyObject?) {
-        textView.text = (cache["myText"] as? String) ?? ""
+        print(cache["person"])
+        textView.text = cache["person"]?.description
     }
     
     @IBAction func saveInCache(_ sender: AnyObject?) {
-        cache["myText"] = textView.text as NSString?
+        
+        cache["person"] = Person(name: "Caiflower", age: 30)
     }
 }
 
